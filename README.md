@@ -172,4 +172,4 @@ The pet itself is a 13×9 ASCII grid — edit `INVADER` to redraw it entirely.
 
 ## Licence
 
-MIT.
+MIT. See [LICENSE](LICENSE).
