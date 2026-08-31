@@ -1,0 +1,18 @@
+# Runtime files the pet writes NEXT TO ITSELF. If you run it from inside this
+# folder, these appear here - and cloudpet_key.txt holds your Gemini API key in
+# plain text. Publishing that would hand your key to anyone who clones the repo.
+cloudpet_key.txt
+cloudpet_data.json
+cloudpet_notes.txt
+cloudpet_error.log
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# PyInstaller build output
+build/
+dist/
+*.spec
