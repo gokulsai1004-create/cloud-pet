@@ -3,6 +3,10 @@
 **A pixel companion that lives on top of your screen, watches your laptop, and
 keeps track of how long you spend talking to AI.**
 
+<p align="center">
+  <img src="docs/nimbus.gif" alt="Nimbus bobbing on screen, blinking, with a green session dot" width="180">
+</p>
+
 Nimbus floats above every window, bobs gently, blinks, and changes mood based on
 what your machine is actually doing. Right-click it and it will answer a
 question, research something on the web, set you a reminder, or take a note.
@@ -33,6 +37,8 @@ toy that opens with a dependency error is a desktop toy nobody runs.
 ## Moods
 
 The face is not decoration — every expression is a reading.
+
+![The four moods: calm, happy, stressed, worried](docs/moods.png)
 
 | Mood | What it means |
 |---|---|
