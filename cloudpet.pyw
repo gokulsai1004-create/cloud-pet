@@ -12,6 +12,7 @@ Rename this file from .py to .pyw so it runs with no black window.
 """
 
 import os
+import io
 import json
 import time
 import math
@@ -228,6 +229,11 @@ class CloudPet:
         self._last_proj_mtime = 0
         self.speech = "hi! i'm nimbus \u2601"
         self.speech_until = time.time() + 4
+        self.claude_seen = []
+        # None means the inbox has not been read yet. The first pass seeks to
+        # the end: a pet that starts up and announces every session you ran
+        # last week is not information.
+        self.claude_at = None
 
         self.canvas.bind("<Button-1>", self._start_drag)
         self.canvas.bind("<B1-Motion>", self._drag)
@@ -246,6 +252,7 @@ class CloudPet:
         m.add_command(label="What matters today", command=self._show_board)
         m.add_command(label="Who hasn't replied", command=self._show_outreach)
         m.add_command(label="What I shipped", command=self._show_ship)
+        m.add_command(label="What Claude just did", command=self._show_claude)
         m.add_separator()
         m.add_command(label="Ask AI\u2026", command=lambda: self._ask_ai(False))
         m.add_command(label="Research the web\u2026", command=lambda: self._ask_ai(True))
@@ -412,6 +419,87 @@ class CloudPet:
             except Exception:
                 pass
 
+    # claude code -----------------------------------------------------
+    CLAUDE_INBOX = os.path.join(os.path.expanduser("~"), ".claude", "pet",
+                                "inbox.jsonl")
+
+    def _check_claude(self):
+        """Say what a Claude Code session just did, or what it is asking.
+
+        The hook appends a line per event and this reads from wherever it
+        stopped last time, so the cost of an idle inbox is one stat() per
+        tick. The file gets trimmed when it grows, which shows up here as a
+        size smaller than the offset - that is a rewrite, not new events, so
+        the offset resets rather than seeking past the end.
+        """
+        try:
+            size = os.path.getsize(self.CLAUDE_INBOX)
+        except Exception:
+            return
+        if self.claude_at is None:
+            self.claude_at = size
+            return
+        if size < self.claude_at:
+            self.claude_at = 0
+        if size == self.claude_at:
+            return
+
+        try:
+            with io.open(self.CLAUDE_INBOX, encoding="utf-8") as fh:
+                fh.seek(self.claude_at)
+                fresh = fh.read()
+                self.claude_at = fh.tell()
+        except Exception:
+            return
+
+        events = []
+        for line in fresh.splitlines():
+            try:
+                event = json.loads(line)
+            except Exception:
+                continue
+            if isinstance(event, dict) and event.get("session"):
+                events.append(event)
+        if not events:
+            return
+
+        self.claude_seen = (self.claude_seen + events)[-12:]
+        latest = events[-1]
+        name = latest.get("session", "claude")[:18]
+        _beep()
+        if latest.get("kind") == "ask":
+            # A question is blocking the session, so it holds the bubble
+            # longer than a finished one, which is merely news.
+            self._say("%s asks \u2753" % name, 10)
+        else:
+            self._say("%s done \u2714" % name, 6)
+
+    def _show_claude(self):
+        """The last few sessions, newest first."""
+        if not self.claude_seen:
+            self._panel("Claude",
+                        "  Nothing yet.\n\n"
+                        "  Either no session has finished since Nimbus\n"
+                        "  started, or the hook is not installed. It is not\n"
+                        "  the same as Claude having done nothing.")
+            return
+
+        lines = []
+        for event in reversed(self.claude_seen):
+            ago = int(time.time() - event.get("ts", time.time()))
+            when = ("just now" if ago < 60 else
+                    "%dm ago" % (ago // 60) if ago < 3600 else
+                    "%dh ago" % (ago // 3600))
+            lines.append("  %s  %s  (%s)"
+                         % ("ASKS" if event.get("kind") == "ask" else "DONE",
+                            event.get("session", ""), when))
+            if event.get("hint"):
+                lines.append("    %s" % event["hint"])
+            for point in event.get("points", []):
+                lines.append("      - %s" % point)
+            lines.append("")
+        self._panel("Claude", "\n".join(lines))
+
     # speech / status --------------------------------------------------
     def _say(self, text, seconds=4):
         self.speech = text
@@ -503,6 +591,7 @@ class CloudPet:
                 save_data(self.data)
 
         self._check_reminders()
+        self._check_claude()
 
         self._proj_ctr = getattr(self, "_proj_ctr", 0) + 1
         if self._proj_ctr % 5 == 0:

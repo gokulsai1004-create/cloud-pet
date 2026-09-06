@@ -120,6 +120,48 @@ reads nobody else's notes. When it is missing, the board says so and stops
 rather than printing an empty day: unreadable and empty are different answers,
 and only one of them means you have nothing to do.
 
+## When Claude Code finishes
+
+Claude Code runs long enough that you look away, and then one of two things
+happens invisibly: it finishes, or it stops to ask you something and waits.
+The second one is the expensive one. `hooks/claude_hook.py` writes a line per
+event into `~/.claude/pet/inbox.jsonl` and Nimbus tails it, so it says
+`apisurface done` or `cloud-pet asks` instead of you finding out ten minutes
+later. **What Claude just did** in the right-click menu shows the last few,
+with the bullet points from the session's closing summary.
+
+Add it to `~/.claude/settings.json`, keeping any hooks already in the arrays:
+
+```json
+"hooks": {
+  "Stop": [
+    { "hooks": [{ "type": "command", "timeout": 10,
+                  "command": "py -3 C:/path/to/cloud-pet/hooks/claude_hook.py done" }] }
+  ],
+  "PreToolUse": [
+    { "matcher": "AskUserQuestion|ExitPlanMode",
+      "hooks": [{ "type": "command", "timeout": 10,
+                  "command": "py -3 C:/path/to/cloud-pet/hooks/claude_hook.py ask" }] }
+  ]
+}
+```
+
+Three things it is careful about, because a hook runs on the critical path of
+every single turn:
+
+- **It never fails a turn.** Every error is swallowed and the exit code is
+  always 0. A pet that breaks your session is worse than no pet.
+- **It redacts before writing.** A transcript quotes whatever you pasted into
+  the session, and people paste API keys into sessions. Anything shaped like a
+  credential is replaced before it reaches the file, let alone the screen.
+- **It reads the tail, not the file.** Transcripts reach tens of megabytes.
+  Reading 300 KB off the end keeps the hook near a second on a 24 MB session
+  instead of putting real time on the end of every turn.
+
+The pet reads from wherever it stopped last time, so an idle inbox costs one
+`stat()` per tick. On startup it seeks to the end: a pet that boots and
+announces every session you ran last week is not information.
+
 ## A detail worth stealing
 
 Google renames and retires Gemini models regularly, which breaks anything with a
