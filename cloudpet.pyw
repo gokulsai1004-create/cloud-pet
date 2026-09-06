@@ -44,6 +44,16 @@ CONFIG = {
     # Free Google Gemini model. If chat errors with a model message,
     # change this (e.g. "gemini-2.5-flash" or "gemini-1.5-flash").
     "ai_model": "gemini-2.0-flash",
+    # System-wide keys. Windows gives a combo to whoever asked first, so a
+    # clash is reported at startup rather than leaving you pressing a dead
+    # key. ctrl+alt+space is taken on a stock Windows 11 box; these are not.
+    "hotkeys": {
+        "ctrl+alt+n": "boards",
+        "ctrl+alt+b": "board",
+        "ctrl+alt+o": "outreach",
+        "ctrl+alt+s": "ship",
+        "ctrl+alt+h": "hide",
+    },
 }
 
 BODY = "#E8895A"
@@ -229,6 +239,13 @@ class CloudPet:
         self._last_proj_mtime = 0
         self.speech = "hi! i'm nimbus \u2601"
         self.speech_until = time.time() + 4
+        self._panels = {}
+        self.hidden = False
+        try:
+            import hotkeys as _hotkeys
+            self.hotkeys = _hotkeys.Hotkeys(self.cfg["hotkeys"]).start()
+        except Exception:
+            self.hotkeys = None
         self.claude_seen = []
         # None means the inbox has not been read yet. The first pass seeks to
         # the end: a pet that starts up and announces every session you ran
@@ -246,6 +263,9 @@ class CloudPet:
         read_cpu()
         self._animate()
         self._monitor()
+        self._pump_hotkeys()
+        # Registration runs on another thread; give it a moment to answer.
+        root.after(1200, self._hotkey_report)
 
     def _build_menu(self, root):
         m = tk.Menu(root, tearoff=0)
@@ -253,6 +273,7 @@ class CloudPet:
         m.add_command(label="Who hasn't replied", command=self._show_outreach)
         m.add_command(label="What I shipped", command=self._show_ship)
         m.add_command(label="What Claude just did", command=self._show_claude)
+        m.add_command(label="Hotkeys", command=self._show_hotkeys)
         m.add_separator()
         m.add_command(label="Ask AI\u2026", command=lambda: self._ask_ai(False))
         m.add_command(label="Research the web\u2026", command=lambda: self._ask_ai(True))
@@ -721,7 +742,7 @@ class CloudPet:
         win.attributes("-topmost", True)
 
     # the day ----------------------------------------------------------
-    def _show_board(self):
+    def _show_board(self, at=""):
         """The vault's Doing now, ranked P0 to P3.
 
         Nimbus already knows what the laptop is doing. This is the only thing
@@ -730,26 +751,31 @@ class CloudPet:
         rather than showing an empty board, because empty and unreadable are
         different answers.
         """
-        try:
-            import board as _board
-        except Exception as exc:
-            self._panel("Today", "  board.py did not load: %s" % exc)
-            return
-        try:
-            items, today = _board.board()
-            text = _board.render(items, today)
-        except Exception as exc:
-            self._panel("Today",
-                        "  Could not read the vault.\n  %s\n\n"
-                        "  This is not an empty day, it is an unread one." % exc)
-            return
+        def work():
+            try:
+                import board as _board
+            except Exception as exc:
+                return "  board.py did not load: %s" % exc, None
+            try:
+                items, today = _board.board()
+                return _board.render(items, today), items
+            except Exception as exc:
+                return ("  Could not read the vault.\n  %s\n\n"
+                        "  This is not an empty day, it is an unread one."
+                        % exc), None
 
-        urgent = [i for i in items if i["p"] == 0] or [i for i in items if i["p"] == 1]
-        if urgent:
-            self._say(urgent[0]["title"][:22], 6)
-        self._panel("Today", text)
+        def done(result):
+            text, items = result
+            if items:
+                urgent = ([i for i in items if i["p"] == 0]
+                          or [i for i in items if i["p"] == 1])
+                if urgent:
+                    self._say(urgent[0]["title"][:22], 6)
+            self._panel("Today", text, at)
 
-    def _show_outreach(self):
+        self._in_background("Today", at, work, done)
+
+    def _show_outreach(self, at=""):
         """Who owes a reply, and how long it has actually been.
 
         Counting the days rather than letting the feeling do it. A silence
@@ -757,33 +783,69 @@ class CloudPet:
         lasted, so the panel refuses to let a short one read as one.
         """
         self._board_panel("Outreach", "outreach",
-                          lambda mod: mod.render(*mod.rows()))
+                          lambda mod: mod.render(*mod.rows()), at)
 
-    def _show_ship(self):
+    def _show_ship(self, at=""):
         """Commits, not intentions."""
         self._board_panel("Shipping", "ship",
-                          lambda mod: mod.render(*mod.survey()))
+                          lambda mod: mod.render(*mod.survey()), at)
 
-    def _board_panel(self, title, module, run):
+    def _board_panel(self, title, module, run, at=""):
         """Shared plumbing. A panel that cannot read its source says so
         instead of rendering an empty one, because empty and unreadable are
         different answers and only one of them is news."""
-        try:
-            mod = __import__(module)
-        except Exception as exc:
-            self._panel(title, "  %s.py did not load: %s" % (module, exc))
-            return
-        try:
-            text = run(mod)
-        except Exception as exc:
-            text = ("  Could not read the source for this panel.\n  %s\n\n"
-                    "  Unread is not the same as nothing there." % exc)
-        self._panel(title, text)
+        def work():
+            try:
+                mod = __import__(module)
+            except Exception as exc:
+                return "  %s.py did not load: %s" % (module, exc)
+            try:
+                return run(mod)
+            except Exception as exc:
+                return ("  Could not read the source for this panel.\n  %s\n\n"
+                        "  Unread is not the same as nothing there." % exc)
 
-    def _panel(self, title, text):
+        self._in_background(title, at, work,
+                            lambda text: self._panel(title, text, at))
+
+    def _in_background(self, title, at, work, done):
+        """Read on a worker thread, draw on the main one.
+
+        Shipping runs git once per repository and the vault sits on disk, so
+        doing this inline froze the whole pet until the last subprocess came
+        back - long enough that a keypress looked like it had done nothing.
+        Tk is not thread-safe, so the worker only ever returns a value and
+        after() does the drawing.
+        """
+        self._panel(title, "  reading\u2026", at)
+
+        def run():
+            try:
+                result = work()
+            except Exception as exc:
+                result = "  %s" % exc
+            self.root.after(0, lambda: done(result))
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _panel(self, title, text, at=""):
+        # One window per title. A hotkey gets pressed again when you want the
+        # panel refreshed, not when you want a second copy of it, and three
+        # presses of the boards key would otherwise leave nine windows open.
+        old = self._panels.pop(title, None)
+        if old is not None:
+            try:
+                old.destroy()
+            except Exception:
+                pass
+
         win = tk.Toplevel(self.root)
+        self._panels[title] = win
+        win.bind("<Destroy>",
+                 lambda e, t=title: self._panels.pop(t, None)
+                 if e.widget is self._panels.get(t) else None)
         win.title(title)
-        win.geometry("520x300")
+        win.geometry("520x300" + at)
         frame = tk.Frame(win)
         frame.pack(fill="both", expand=True)
         sb = tk.Scrollbar(frame)
@@ -795,6 +857,93 @@ class CloudPet:
         txt.pack(side="left", fill="both", expand=True)
         sb.config(command=txt.yview)
         win.attributes("-topmost", True)
+
+    # hotkeys ----------------------------------------------------------
+    def _pump_hotkeys(self):
+        """Drain the hotkey thread, on the main thread.
+
+        Faster than the monitor tick, because this one is a key press and a
+        second of lag makes a shortcut feel broken. An empty queue costs
+        nothing, and it is almost always empty.
+        """
+        if self.hotkeys:
+            for action in self.hotkeys.poll():
+                try:
+                    self._hotkey(action)
+                except Exception:
+                    # A key that fires and then silently does nothing is the
+                    # worst of both worlds: it looks broken and leaves no
+                    # trace of why.
+                    import traceback
+                    try:
+                        with io.open(os.path.join(_HERE, "cloudpet_error.log"),
+                                     "a", encoding="utf-8") as fh:
+                            fh.write("hotkey %s\n%s\n"
+                                     % (action, traceback.format_exc()))
+                    except Exception:
+                        pass
+                    self._say("hotkey failed \u2014 see log", 6)
+        self.root.after(120, self._pump_hotkeys)
+
+    def _hotkey(self, action):
+        if action == "hide":
+            self._toggle_hidden()
+        elif action == "boards":
+            self._show_all_boards()
+        elif action == "board":
+            self._show_board()
+        elif action == "outreach":
+            self._show_outreach()
+        elif action == "ship":
+            self._show_ship()
+
+    def _toggle_hidden(self):
+        self.hidden = not self.hidden
+        if self.hidden:
+            self.root.withdraw()
+        else:
+            self.root.deiconify()
+            self.root.wm_attributes("-topmost", True)
+            self._say("back \u2601", 3)
+
+    def _show_all_boards(self):
+        """All three, down the left rather than on top of each other.
+
+        Panels stay up while the pet is hidden - a Toplevel does not go with a
+        withdrawn root - so hiding the cloud does not cost you the boards.
+        """
+        height = self.root.winfo_screenheight()
+        step = min(310, max(200, (height - 120) // 3))
+        for index, show in enumerate((self._show_board, self._show_outreach,
+                                      self._show_ship)):
+            show(at="+30+%d" % (30 + index * step))
+
+    def _hotkey_report(self):
+        """Say once, at startup, when a key did not bind.
+
+        A shortcut that silently never registered looks exactly like one you
+        keep pressing wrong, and you would go on pressing it for weeks.
+        """
+        if self.hotkeys and self.hotkeys.problems:
+            self._say("a hotkey is taken \u2014 see menu", 8)
+
+    def _show_hotkeys(self):
+        if not self.hotkeys:
+            self._panel("Hotkeys", "  Hotkeys did not load at all.")
+            return
+        lines = ["  Global keys", "  " + "-" * 44]
+        for combo in sorted(self.hotkeys.bound):
+            lines.append("  %-18s %s"
+                         % (combo, self.cfg["hotkeys"].get(combo, "")))
+        if self.hotkeys.problems:
+            lines.append("")
+            lines.append("  BLOCKED")
+            for problem in self.hotkeys.problems:
+                lines.append("    %s" % problem)
+            lines.append("")
+            lines.append("  Windows gives a combo to whoever asked first.")
+            lines.append("  Change it in CONFIG['hotkeys'] and restart.")
+        self._panel("Hotkeys", "\n".join(lines))
 
     # animation --------------------------------------------------------
     def _animate(self):

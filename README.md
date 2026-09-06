@@ -162,6 +162,38 @@ The pet reads from wherever it stopped last time, so an idle inbox costs one
 `stat()` per tick. On startup it seeks to the end: a pet that boots and
 announces every session you ran last week is not information.
 
+## Hotkeys
+
+A pet is only worth having if reaching it is cheaper than the thing you would
+do instead, and right-clicking a 100-pixel cloud is not cheaper than opening
+the vault. So the boards have keys:
+
+| | |
+|---|---|
+| `Ctrl+Alt+N` | all three boards, down the left of the screen |
+| `Ctrl+Alt+B` | today only |
+| `Ctrl+Alt+O` | outreach |
+| `Ctrl+Alt+S` | shipping |
+| `Ctrl+Alt+H` | hide the pet, and bring it back |
+
+`hotkeys.py` is `RegisterHotKey` through ctypes and nothing else, in keeping
+with the rest of the pet. Windows posts `WM_HOTKEY` to the *thread* that
+registered the key, so it owns a thread with a real `GetMessage` loop and
+hands presses to Tk through a queue; Tk is not thread-safe and the queue is
+the seam. Change the bindings in `CONFIG["hotkeys"]`.
+
+Windows gives a combo to whichever program asked first, and says so at
+registration rather than failing later. **A key that does not bind is
+reported** — in the bubble at startup and under `Hotkeys` in the menu — because
+a shortcut that silently never registered is indistinguishable from one you
+keep pressing wrong, and you would go on pressing it for weeks. On this
+machine `Ctrl+Alt+Space`, the obvious choice, is already taken by something
+else; that is exactly how it was found.
+
+Pressing a key again refreshes that panel instead of opening a second copy of
+it, and the boards read on a worker thread, so shipping can spend five seconds
+in `git` without the pet stopping to wait for it.
+
 ## A detail worth stealing
 
 Google renames and retires Gemini models regularly, which breaks anything with a
