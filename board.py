@@ -135,65 +135,183 @@ def open_verdicts(today):
     return out
 
 
-def rank(items, today):
-    """P0 to P3. Nearness decides, because a deadline is the only thing here
-    that cannot be moved by wanting it moved."""
+RANKS = ["P0", "P1", "P2", "P3"]
+
+# Pins live next to the pet, not in the vault: a pin is how you overrode the
+# board today, not something you wrote down and meant.
+PINS = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                    ".board_pins.json")
+
+
+def load_pins():
+    try:
+        with io.open(PINS, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except Exception:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return dict((k, v) for k, v in data.items() if v in RANKS)
+
+
+def save_pins(pins):
+    with io.open(PINS, "w", encoding="utf-8") as fh:
+        fh.write(json.dumps(pins, indent=1, ensure_ascii=False))
+
+
+def toggle_pin(pins, title, want):
+    """Pin a title to a rank. Pinning the rank it already holds clears it.
+
+    One gesture does both, because the moment you notice a pin is wrong is the
+    same moment you reach for the key that set it. A rank holds one item, so
+    pinning something to an occupied rank evicts what was there rather than
+    silently dropping the new pin.
+    """
+    if pins.get(title) == want:
+        del pins[title]
+        return None
+    for other in [k for k, v in pins.items() if v == want]:
+        del pins[other]
+    pins[title] = want
+    return want
+
+
+def urgency(item):
+    """Sort key: dated first by nearness, then whatever the vault bolded, then
+    the rest."""
+    if item["days"] is not None:
+        return (0, item["days"])
+    if item.get("note"):
+        return (1, 0)
+    return (2, 0)
+
+
+def rank(items, today, pins=None):
+    """P0 to P3, and only one item can hold each.
+
+    Marking four things P0 is the same as marking none: it is a list again and
+    the ranking has stopped costing anything. So each label is a slot holding
+    exactly one item. The nearest deadline takes the first free slot, and what
+    does not fit stays unranked instead of being quietly promoted.
+
+    A pin takes its slot before anything else, because a rule you cannot
+    override gets ignored the first time it is wrong.
+    """
+    pins = pins if pins is not None else {}
     for item in items:
-        days = (item["due"] - today).days if item["due"] else None
-        item["days"] = days
-        if days is not None and days <= 2:
-            item["p"] = 0
-        elif days is not None and days <= 9:
-            item["p"] = 1
-        elif days is not None:
-            item["p"] = 2
-        elif item.get("note"):
-            # No date, but something on the line was bolded. A commitment with
-            # no deadline can still be the most live thing you have, so an
-            # emphasised line is not background just because nobody dated it.
-            item["p"] = 2
-        else:
-            item["p"] = 3
-    items.sort(key=lambda i: (i["p"], i["days"] if i["days"] is not None else 999,
-                              i["title"]))
+        item["days"] = (item["due"] - today).days if item["due"] else None
+        item["p"] = None
+        item["pinned"] = False
+
+    items.sort(key=lambda i: (urgency(i), i["title"]))
+
+    taken = {}
+    for item in items:
+        want = pins.get(item["title"])
+        if want and want not in taken:
+            item["p"], item["pinned"] = RANKS.index(want), True
+            taken[want] = True
+
+    for item in items:
+        if item["p"] is not None:
+            continue
+        for slot, label in enumerate(RANKS):
+            if label not in taken:
+                item["p"], taken[label] = slot, True
+                break
+
+    items.sort(key=lambda i: (9 if i["p"] is None else i["p"],
+                              urgency(i), i["title"]))
     return items
 
 
-def board(today=None):
+def board(today=None, pins=None):
     today = today or datetime.date.today()
     items = doing_now(VAULT, today) + open_verdicts(today)
-    return rank(items, today), today
+    return rank(items, today, load_pins() if pins is None else pins), today
+
+
+def resolve(items, text):
+    """A title from a fragment of one. Ambiguous is not a match: which of two
+    things you meant to pin is the last place to guess."""
+    names = [i["title"] for i in items]
+    for name in names:
+        if name.lower() == text.lower():
+            return name, None
+    hits = [n for n in names if text.lower() in n.lower()]
+    if len(hits) == 1:
+        return hits[0], None
+    if not hits:
+        return None, "nothing on the board matches %r" % text
+    return None, "%r matches %d items: %s" % (text, len(hits), ", ".join(hits))
+
+
+def when(days):
+    if days is None:
+        return ""
+    return ("today" if days == 0 else
+            "tomorrow" if days == 1 else
+            "%d days" % days if days > 0 else
+            "%d days ago" % -days)
 
 
 def render(items, today, width=64):
     lines = ["  %s" % today.strftime("%A %d %B"), "  " + "-" * width]
     if not items:
-        lines.append("  Nothing in the vault's Doing now. That is a real empty,")
-        lines.append("  not a failure to read it.")
+        lines.append("  Nothing under Doing now. That is a real empty, not a")
+        lines.append("  failure to read the vault.")
         return "\n".join(lines)
 
-    labels = {0: "P0", 1: "P1", 2: "P2", 3: "P3"}
-    shown = 0
-    for item in items:
-        if item["p"] <= 2 or shown < 6:
-            when = ""
-            if item["days"] is not None:
-                when = ("today" if item["days"] == 0 else
-                        "tomorrow" if item["days"] == 1 else
-                        "%d days" % item["days"] if item["days"] > 0 else
-                        "%d days ago" % -item["days"])
-            head = "  %s  %s" % (labels[item["p"]], item["title"][:44])
-            lines.append(head + (" " * max(1, 54 - len(head))) + when)
-            if item["note"] and item["p"] <= 1:
-                lines.append("        %s" % item["note"][:56])
-            shown += 1
+    ranked = [i for i in items if i["p"] is not None]
+    rest = [i for i in items if i["p"] is None]
+
+    for item in ranked:
+        label = RANKS[item["p"]] + ("*" if item["pinned"] else " ")
+        head = "  %s %s" % (label, item["title"][:44])
+        lines.append(head + (" " * max(1, 54 - len(head))) + when(item["days"]))
+        if item["note"] and item["p"] <= 1:
+            lines.append("        %s" % item["note"][:56])
+
+    # Two things due the same day is the case the ranking exists for, so the
+    # board owns the choice out loud instead of letting the order imply it.
+    if (len(ranked) > 1 and ranked[0]["days"] is not None
+            and ranked[1]["days"] == ranked[0]["days"]):
+        lines.append("")
+        lines.append("  Both due %s. P0 is the one you do first."
+                     % when(ranked[0]["days"]))
+
+    if rest:
+        lines.append("")
+        lines.append("  then")
+        for item in rest[:4]:
+            head = "     %s" % item["title"][:44]
+            lines.append(head + (" " * max(1, 54 - len(head)))
+                         + when(item["days"]))
+        if len(rest) > 4:
+            lines.append("     and %d more" % (len(rest) - 4))
+
+    if any(i["pinned"] for i in ranked):
+        lines.append("")
+        lines.append("  * pinned by you, not by the deadline")
     return "\n".join(lines)
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[1])
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--pin", nargs=2, metavar=("RANK", "TITLE"),
+                    help="hold a title at a rank; the same pin again clears it")
+    ap.add_argument("--unpin", metavar="TITLE")
+    ap.add_argument("--pins", action="store_true", help="list current pins")
     args = ap.parse_args()
+
+    if args.pins:
+        pins = load_pins()
+        if not pins:
+            print("  No pins. The board is ranking on deadlines alone.")
+        for title, held in sorted(pins.items(), key=lambda kv: kv[1]):
+            print("  %s  %s" % (held, title))
+        return 0
 
     if not os.path.isdir(VAULT):
         print("  Vault not found at %s" % VAULT, file=sys.stderr)
@@ -202,10 +320,32 @@ def main():
         return 2
 
     items, today = board()
+
+    if args.pin or args.unpin:
+        pins = load_pins()
+        text = args.pin[1] if args.pin else args.unpin
+        title, problem = resolve(items, text)
+        if problem:
+            print("  %s" % problem, file=sys.stderr)
+            return 2
+        if args.unpin:
+            pins.pop(title, None)
+            print("  unpinned %s" % title)
+        else:
+            want = args.pin[0].upper()
+            if want not in RANKS:
+                print("  rank must be one of %s" % ", ".join(RANKS),
+                      file=sys.stderr)
+                return 2
+            held = toggle_pin(pins, title, want)
+            print("  %s %s" % ("unpinned" if held is None else held, title))
+        save_pins(pins)
+        items, today = board(pins=pins)
+
     if args.json:
         print(json.dumps(
-            [{k: (v.isoformat() if isinstance(v, datetime.date) else v)
-              for k, v in i.items()} for i in items], indent=1))
+            [dict((k, v.isoformat() if isinstance(v, datetime.date) else v)
+                  for k, v in i.items()) for i in items], indent=1))
     else:
         print()
         print(render(items, today))

@@ -89,7 +89,11 @@ each one answers a question rather than listing things:
 
 - **What matters today** — reads the `Doing now` section of an Obsidian vault
   and ranks it P0 to P3 by how near the deadline is, because a date is the only
-  thing on that list that cannot be moved by wanting it moved.
+  thing on that list that cannot be moved by wanting it moved. **Each label
+  holds exactly one item.** Four things marked P0 is a list again, so the
+  nearest deadline takes the first free slot and the rest go under `then`.
+  Disagree with it and pin: `board.py --pin P0 apisurface` holds it there, and
+  the same pin again clears it.
 - **Who hasn't replied** — counts the days since you sent each message, and
   says outright when it is still too early to read anything into a silence.
 - **What I shipped** — commits per repo in the last seven days, from `git`.

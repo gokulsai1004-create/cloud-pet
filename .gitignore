@@ -5,6 +5,7 @@ cloudpet_key.txt
 cloudpet_data.json
 cloudpet_notes.txt
 cloudpet_error.log
+.board_pins.json
 
 # Python
 __pycache__/
