@@ -243,6 +243,10 @@ class CloudPet:
 
     def _build_menu(self, root):
         m = tk.Menu(root, tearoff=0)
+        m.add_command(label="What matters today", command=self._show_board)
+        m.add_command(label="Who hasn't replied", command=self._show_outreach)
+        m.add_command(label="What I shipped", command=self._show_ship)
+        m.add_separator()
         m.add_command(label="Ask AI\u2026", command=lambda: self._ask_ai(False))
         m.add_command(label="Research the web\u2026", command=lambda: self._ask_ai(True))
         m.add_separator()
@@ -620,6 +624,82 @@ class CloudPet:
         sb = tk.Scrollbar(frame)
         sb.pack(side="right", fill="y")
         txt = tk.Text(frame, wrap="word", font=("Segoe UI", 10),
+                      yscrollcommand=sb.set, padx=10, pady=10)
+        txt.insert("1.0", text)
+        txt.config(state="disabled")
+        txt.pack(side="left", fill="both", expand=True)
+        sb.config(command=txt.yview)
+        win.attributes("-topmost", True)
+
+    # the day ----------------------------------------------------------
+    def _show_board(self):
+        """The vault's Doing now, ranked P0 to P3.
+
+        Nimbus already knows what the laptop is doing. This is the only thing
+        it knows about what you are doing, and it comes off the disk: no
+        network, no key, no account. If the vault cannot be read it says so
+        rather than showing an empty board, because empty and unreadable are
+        different answers.
+        """
+        try:
+            import board as _board
+        except Exception as exc:
+            self._panel("Today", "  board.py did not load: %s" % exc)
+            return
+        try:
+            items, today = _board.board()
+            text = _board.render(items, today)
+        except Exception as exc:
+            self._panel("Today",
+                        "  Could not read the vault.\n  %s\n\n"
+                        "  This is not an empty day, it is an unread one." % exc)
+            return
+
+        urgent = [i for i in items if i["p"] == 0] or [i for i in items if i["p"] == 1]
+        if urgent:
+            self._say(urgent[0]["title"][:22], 6)
+        self._panel("Today", text)
+
+    def _show_outreach(self):
+        """Who owes a reply, and how long it has actually been.
+
+        Counting the days rather than letting the feeling do it. A silence
+        that later turned into a yes looked identical to a refusal while it
+        lasted, so the panel refuses to let a short one read as one.
+        """
+        self._board_panel("Outreach", "outreach",
+                          lambda mod: mod.render(*mod.rows()))
+
+    def _show_ship(self):
+        """Commits, not intentions."""
+        self._board_panel("Shipping", "ship",
+                          lambda mod: mod.render(*mod.survey()))
+
+    def _board_panel(self, title, module, run):
+        """Shared plumbing. A panel that cannot read its source says so
+        instead of rendering an empty one, because empty and unreadable are
+        different answers and only one of them is news."""
+        try:
+            mod = __import__(module)
+        except Exception as exc:
+            self._panel(title, "  %s.py did not load: %s" % (module, exc))
+            return
+        try:
+            text = run(mod)
+        except Exception as exc:
+            text = ("  Could not read the source for this panel.\n  %s\n\n"
+                    "  Unread is not the same as nothing there." % exc)
+        self._panel(title, text)
+
+    def _panel(self, title, text):
+        win = tk.Toplevel(self.root)
+        win.title(title)
+        win.geometry("520x300")
+        frame = tk.Frame(win)
+        frame.pack(fill="both", expand=True)
+        sb = tk.Scrollbar(frame)
+        sb.pack(side="right", fill="y")
+        txt = tk.Text(frame, wrap="none", font=("Consolas", 10),
                       yscrollcommand=sb.set, padx=10, pady=10)
         txt.insert("1.0", text)
         txt.config(state="disabled")

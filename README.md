@@ -80,6 +80,42 @@ Double-click the pet for a readout: `cloud time 47m · cpu 12% · bat 88% · 6 p
 - **Lock screen**, open Claude.ai, open your notes.
 - Drag it anywhere. It stays on top and remembers nothing it should not.
 
+## Three boards
+
+The pet watches the machine: CPU, memory, battery, the focused window. That
+tells you what the laptop is doing, never what you are supposed to be doing.
+So three more right-click items read your notes and your repos instead, and
+each one answers a question rather than listing things:
+
+- **What matters today** — reads the `Doing now` section of an Obsidian vault
+  and ranks it P0 to P3 by how near the deadline is, because a date is the only
+  thing on that list that cannot be moved by wanting it moved.
+- **Who hasn't replied** — counts the days since you sent each message, and
+  says outright when it is still too early to read anything into a silence.
+- **What I shipped** — commits per repo in the last seven days, from `git`.
+  A week feels productive long after it stopped being one.
+
+They run standalone too:
+
+```
+py -3 board.py            # add --json for machine-readable
+py -3 outreach.py
+py -3 ship.py
+py -3 three.py            # all three panels at once
+```
+
+Point them at your own files with two environment variables:
+
+```
+setx PET_VAULT "C:\path\to\your\vault"
+setx PET_CODE  "C:\path\to\your\repos"
+```
+
+`PET_VAULT` defaults to a `vault` folder next to the pet, so a fresh clone
+reads nobody else's notes. When it is missing, the board says so and stops
+rather than printing an empty day: unreadable and empty are different answers,
+and only one of them means you have nothing to do.
+
 ## A detail worth stealing
 
 Google renames and retires Gemini models regularly, which breaks anything with a
