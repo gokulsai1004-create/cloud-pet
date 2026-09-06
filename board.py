@@ -178,12 +178,81 @@ def toggle_pin(pins, title, want):
 
 def urgency(item):
     """Sort key: dated first by nearness, then whatever the vault bolded, then
-    the rest."""
+    the rest. Inside the undated groups, the smart pass's weight breaks ties;
+    it is 0 for everything until that pass has run."""
     if item["days"] is not None:
         return (0, item["days"])
     if item.get("note"):
-        return (1, 0)
-    return (2, 0)
+        return (1, item.get("weight", 0))
+    return (2, item.get("weight", 0))
+
+
+SMART_SYSTEM = ("You order a short list of someone's open work by which "
+                "most deserves their attention next. You reply with one JSON "
+                "object and nothing else.")
+
+# What the last smart pass did, so render can say so. A pass that quietly did
+# nothing would leave the board looking identical to one that worked.
+SMART_NOTE = None
+
+
+def smart_order(items):
+    """Order the undated items with a model. Deadlines are never touched.
+
+    The rule handles everything with a date, which is the part that actually
+    matters and the part a model could get wrong. What it cannot do is order
+    six things that all have no date, where today it falls back to
+    alphabetical - which is not an opinion about anything. That tail is the
+    only thing sent, so the call is small, and losing it costs nothing.
+    """
+    global SMART_NOTE
+    import ask
+
+    undated = [i for i in items if not i.get("due")]
+    if len(undated) < 2:
+        SMART_NOTE = None
+        return None
+
+    payload = [{"id": str(n),
+                "text": (i["title"] + (" - " + i["note"] if i["note"] else ""))[:160]}
+               for n, i in enumerate(undated)]
+    prompt = ('Order these by which most deserves attention next. Reply with '
+              '{"order":["id", ...]} using every id exactly once, nothing '
+              "else.\n" + json.dumps(payload, ensure_ascii=False))
+
+    answer = ask.ask_json(SMART_SYSTEM, prompt)
+    if not answer.ok:
+        SMART_NOTE = (answer.status, answer.detail)
+        return SMART_NOTE
+
+    order = answer.data.get("order")
+    if not isinstance(order, list) or not order:
+        SMART_NOTE = (ask.ERROR, "the reply carried no order")
+        return SMART_NOTE
+
+    # A short, duplicated or partly invented list is still worth having:
+    # honour the ids that resolve and leave the rest where they were. The
+    # alternative is throwing away a good ordering over one bad entry.
+    placed = 0
+    for position, ident in enumerate(order):
+        try:
+            index = int(ident)
+        except Exception:
+            continue
+        if 0 <= index < len(undated) and "weight" not in undated[index]:
+            undated[index]["weight"] = position
+            placed += 1
+    for item in undated:
+        item.setdefault("weight", len(order) + 1)
+
+    if not placed:
+        SMART_NOTE = (ask.ERROR, "no id in the reply matched an item")
+    elif placed < len(undated):
+        SMART_NOTE = (ask.OK, "ordered %d of %d undated"
+                      % (placed, len(undated)))
+    else:
+        SMART_NOTE = (ask.OK, "ordered %d undated" % placed)
+    return SMART_NOTE
 
 
 def rank(items, today, pins=None):
@@ -225,9 +294,13 @@ def rank(items, today, pins=None):
     return items
 
 
-def board(today=None, pins=None):
+def board(today=None, pins=None, smart=False):
+    """The day, ranked. smart is off by default on purpose: the board is worth
+    having offline, instantly, and with no bill attached."""
     today = today or datetime.date.today()
     items = doing_now(VAULT, today) + open_verdicts(today)
+    if smart:
+        smart_order(items)
     return rank(items, today, load_pins() if pins is None else pins), today
 
 
@@ -293,12 +366,25 @@ def render(items, today, width=64):
     if any(i["pinned"] for i in ranked):
         lines.append("")
         lines.append("  * pinned by you, not by the deadline")
+
+    if SMART_NOTE:
+        status, detail = SMART_NOTE
+        lines.append("")
+        if status == "OK":
+            lines.append("  smart pass: %s" % detail)
+        else:
+            # Say it. A board that silently fell back looks exactly like one
+            # where the model agreed with the alphabet.
+            lines.append("  smart pass %s: %s" % (status, detail))
+            lines.append("  the undated list is in its usual order")
     return "\n".join(lines)
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[1])
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--smart", action="store_true",
+                    help="order the undated tail with claude -p")
     ap.add_argument("--pin", nargs=2, metavar=("RANK", "TITLE"),
                     help="hold a title at a rank; the same pin again clears it")
     ap.add_argument("--unpin", metavar="TITLE")
@@ -319,7 +405,7 @@ def main():
               " and unreadable are different answers.", file=sys.stderr)
         return 2
 
-    items, today = board()
+    items, today = board(smart=args.smart)
 
     if args.pin or args.unpin:
         pins = load_pins()
@@ -340,7 +426,7 @@ def main():
             held = toggle_pin(pins, title, want)
             print("  %s %s" % ("unpinned" if held is None else held, title))
         save_pins(pins)
-        items, today = board(pins=pins)
+        items, today = board(pins=pins, smart=args.smart)
 
     if args.json:
         print(json.dumps(

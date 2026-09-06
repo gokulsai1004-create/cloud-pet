@@ -194,6 +194,61 @@ Pressing a key again refreshes that panel instead of opening a second copy of
 it, and the boards read on a worker thread, so shipping can spend five seconds
 in `git` without the pet stopping to wait for it.
 
+## Asking Claude cheaply, and never needing to
+
+`claude -p` runs Claude from a script and exits, which is how a program can
+use it as a function. The catch is that a fresh session loads your whole
+environment first — CLAUDE.md, memory, skills, plugins, MCP tool definitions —
+and you pay for all of it on every call, for a job that needs none of it. Four
+flags strip it back to the question:
+
+| flag | drops |
+|---|---|
+| `--setting-sources ""` | CLAUDE.md and memory files |
+| `--tools ""` | tool definitions |
+| `--strict-mcp-config` | MCP servers picked up from other configs |
+| `--system-prompt "…"` | the default system prompt, replaced by your one line |
+
+`measure_ask.py` asks the same question both ways and prints what each cost,
+because the ratio depends entirely on how much you have installed and someone
+else's figure says nothing about your machine.
+
+`ask.py` is the wrapper, and it holds three rules:
+
+- **Never the only answer.** Everything that calls it already has a
+  deterministic answer and uses the model to improve one. A model that is
+  unreachable, out of credit, rate limited or talking nonsense costs you
+  nothing.
+- **BLOCKED is not ERROR is not OK.** Could not ask, asked and got something
+  unusable, and got an answer are three different outcomes, and collapsing
+  them is how you end up trusting a silent failure.
+- **"Mostly JSON" is not a contract.** Replies come back fenced, prefixed with
+  prose, truncated, or with invented ids, so they are carved out defensively
+  and a partial ordering is used for the part that resolved.
+
+The board uses it for exactly one thing:
+
+```
+py -3 board.py --smart
+```
+
+Only the **undated** items are sent. Everything with a date is ranked by the
+rule, because that is the part that matters and the part a model could get
+wrong. What the rule cannot do is order six things that all have no date,
+where it falls back to alphabetical — which is not an opinion about anything.
+That tail is the whole payload, so the call is small, and losing it costs a
+sort order.
+
+Off by default. The board is worth having offline, instantly, and with nothing
+attached to it, so the pet never calls this at all.
+
+When it cannot ask, it says so on the board rather than quietly falling back:
+
+```
+  smart pass BLOCKED: Credit balance is too low
+  the undated list is in its usual order
+```
+
 ## A detail worth stealing
 
 Google renames and retires Gemini models regularly, which breaks anything with a
