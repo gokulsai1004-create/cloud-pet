@@ -211,7 +211,21 @@ flags strip it back to the question:
 
 `measure_ask.py` asks the same question both ways and prints what each cost,
 because the ratio depends entirely on how much you have installed and someone
-else's figure says nothing about your machine.
+else's figure says nothing about your machine. Measured here:
+
+| | input tokens | cost | time |
+|---|---|---|---|
+| bare | 34,588 | $0.0240 | 17.7s |
+| stripped | 320 | $0.0017 | 9.9s |
+
+**14x cheaper, 108x fewer input tokens, and about twice as fast.** The gap
+between 108x and 14x is cache reads, which are billed at a fraction of normal
+input - so the token count overstates the saving and only the cost line is
+worth quoting.
+
+The bare call also replied wrapped in a ```json fence and the stripped one did
+not, which is a second reason to send the system prompt and not only a cheaper
+one.
 
 `ask.py` is the wrapper, and it holds three rules:
 
