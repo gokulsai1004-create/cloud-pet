@@ -82,6 +82,13 @@ Double-click the pet for a readout: `cloud time 47m · cpu 12% · bat 88% · 6 p
 
 ## Three boards
 
+> Started from [Matthew Park's costpriority](https://github.com/mattypark/costpriority),
+> a desktop pet that ranks your day P0 to P3. His reads a Mac's calendar. Two
+> things are different here: the ranks are **exclusive**, so only one item can
+> hold P0 and four urgent things stop being a list again, and the source is an
+> Obsidian vault and a folder of git repos rather than a calendar. It also runs
+> on Windows, which his does not.
+
 The pet watches the machine: CPU, memory, battery, the focused window. That
 tells you what the laptop is doing, never what you are supposed to be doing.
 So three more right-click items read your notes and your repos instead, and
